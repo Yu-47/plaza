@@ -229,3 +229,4 @@ def test_rectangle_stamp2() -> None:
                                        0, 0, 0, 0,
                                        0, 1, 0, 0,
                                        0, 2, 0, 0])    
+

@@ -30,6 +30,7 @@
 | 决定 12 | 命令用 JSON，快照用二进制 | JSON 字段有名字，加字段不会打乱旧格式，Python 和 JS 都自带解析；快照数据量约为 JSON 的 1/3，且画布本身就是 bytearray，可直接发送 | 代价：客户端要处理两种消息；二进制不可读，调试不方便 |
 | 决定 13 | 连接后服务器先发 welcome，告知画布尺寸等配置 | 同一信息只存一处，由服务器告诉客户端，避免两边配置不一致 | 代价：多一轮握手 |
 | 决定 14 | 印章图案用二维列表；各行长度不一致则整个拒绝 | 一眼能看出图案形状，宽高可以直接从列表算出；行长度不一致时，宽度有歧义，按某一行宽度去读其他行会越界，盖到一半出错 | 放弃：宽高 + 一维列表（宽高和列表长度可能对不上）。代价：需要逐行检查长度 |
+| 决定 15 | 同一条连接上，第二次 hello 一律拒绝，回复 already_identified，名字保持不变 | 冷却是按名字记录的（决定 5）。如果允许改名，用户在冷却期间发一句 hello 换个名字，就能立刻继续画画，冷却形同虚设 | 决定 5 选择"连接时报一次名字"，好处正是"同一条连接上没法中途换名字"，允许改名就把这个好处丢掉了 |
 
 ## 通信协议
 
@@ -84,6 +85,7 @@
 | invalid_pattern | 图案为空，或各行长度不一致 | — |
 | stamp_too_large | 图案宽或高超过上限 | max_stamp_size |
 | cooldown | 冷却中 | retry_after_ms |
+| already_indentified | 已经表明过身份了 | - |
 
 （订阅相关的消息留到阶段 5 再设计。）
 
@@ -126,3 +128,144 @@ plaza/                  # 仓库根目录
 | 构造参数 | width = 0 或 −5 |
 | 快照 | 内容对不对；拿到快照后再画一格，快照会不会跟着变？|
 | 刚才的陷阱 | 创建两块画布，画其中一块，另一块会不会变？|
+
+### __init__
+- 正常创建 3×2 画布 → 不报错，width=3，height=2
+- width = 0 → ValueError
+- width = 负数 → ValueError
+- height = 0 → ValueError
+- height = 负数 → ValueError
+- palette_size = 0 → ValueError
+- palette_size = 1 → 不报错
+- palette_size = 256 → 不报错
+- palette_size = 257 → ValueError
+
+### get
+- 新画布读 (0, 0) → 0
+- 读右下角 (width-1, height-1) → 0（边界值，不应报错）
+- 越界检查 x 太小：(-1, 0) → OutOfBoundsError
+- 越界检查 y 太小：(0, -1) → OutOfBoundsError
+- 越界检查 x 太大：(width, 0) → OutOfBoundsError
+- 越界检查 y 太大：(0, height) → OutOfBoundsError
+
+### paint
+- 画 (1, 1) 颜色 5，再 get(1, 1) → 5
+- 颜色边界：0 和 palette_size-1 能画上
+- 颜色越界：-1 和 palette_size → InvalidColorError
+- 颜色非法时，原来那一格保持不变
+- 坐标越界四个方向 → OutOfBoundsError
+- 画一格不影响其他格：画 (1, 1)，(0, 0) 和 (2, 1) 仍然是 0
+- 同一格画两次 → 以后一次为准（需求 1）
+
+### snapshot
+- 返回类型是 bytes
+- 长度 = width × height
+- 新画布的快照全是 0
+- 3×2 画布画 (x=2, y=1) 颜色 7 → 快照第 1×3+2 = 5 个字节是 7，其余是 0（验证行优先、行列没有搞反）
+- 拿到快照后再 paint → 之前的快照内容不变（需求 2）
+
+### 其他
+- 两块画布互相独立：画其中一块，另一块不变
+
+### stamp
+- 正常盖一个 2×2 图案，每一格都对吗？
+- 图案刚好贴着右下角边缘，能盖上吗？
+- 图案只有一格超出边缘 → OutOfBoundsError
+- 图案里只有一格颜色非法 → InvalidColorError
+- 空图案 []、空行 [[]]、各行长度不一致 → InvalidPatternError
+- 上面任何一种失败发生后，画布是否一格都没变？怎么写测试来证明这一点？
+
+
+## 协议层设计
+
+### 哪些消息应该由协议层拦下，哪些由Canvas判断
+
+| # |  收到的消息 |  谁来拦截 | 
+|---|---|---| 
+| a | hello world（不是 JSON） | 协议层 | 
+| b | {"type": "jump"} | 协议层 | 
+| c | {"type": "paint", "x": 3, "y": 5}（缺 color）| 协议层 |
+| d | {"type": "paint", "x": "3", "y": 5, "color": 7} | 协议层 |
+| e | {"type": "paint", "x": 3.0, "y": 5, "color": 7} | 协议层 |
+| f | {"type": "paint", "x": true, "y": 5, "color": 7} | 协议层 |
+| g | {"type": "paint", "x": -1, "y": 5, "color": 7} | Canvas |
+| h | {"type": "paint", "x": 3, "y": 5, "color": 99} | Canvas |
+| i | {"type": "stamp", "x": 0, "y": 0, "pattern": [[1, 2], [3]]} | Canvas |
+| j | {"type": "stamp", "x": 0, "y": 0, "pattern": [[1, 2], [3, 'k']]} | 协议层 |
+| k | {"type": "paint", "x": 3, "y": 5, "color": 7, "z": 1}（多了一个字段） | 协议层 |
+
+## 设计"标准表格"，根据阶段 1 的协议，每种请求定义一个 dataclass，只写字段和类型：
+
+``` python
+@dataclass(frozen=True)
+class HelloRequest:
+  name: str
+
+@dataclass(frozen=True)
+class ReadRequest:
+  x: int
+  y: int
+
+@dataclass(frozen=True)
+class PaintRequest:
+  x: int
+  y: int
+  color: int
+
+@dataclass(frozen=True)
+class StampRequest:
+  x: int
+  y: int
+  pattern: list[list[int]]
+
+@dataclass(frozen=True)
+class SnapshotRequest:
+  pass
+```
+
+
+## 设计入口函数和异常
+
+### parse_request 列测试清单
+
+测试清单（tests/test_protocol.py）
+
+合法请求，解析成正确的对象
+- {"type":"hello","name":"xiaoming"} → HelloRequest(name="xiaoming")
+- {"type":"read","x":3,"y":5} → ReadRequest(x=3, y=5)
+- {"type":"paint","x":3,"y":5,"color":7} → PaintRequest(x=3, y=5, color=7)
+- {"type":"stamp","x":0,"y":0,"pattern":[[1,2],[3,4]]} → 对应的 StampRequest
+- {"type":"snapshot"} → SnapshotRequest()
+
+协议层应该放行（交给 Canvas 判断）
+- paint 的 x = -1 → 正常解析，不抛异常
+- paint 的 color = 99 → 正常解析
+- stamp 的 pattern = [[1,2],[3]]（各行不等长）→ 正常解析
+
+invalid_message：JSON 层面
+- hello world（不是 JSON）
+- 空字符串 ""
+- 合法 JSON 但不是对象：[1, 2]、"hello"、5、null
+
+invalid_message：type 字段
+- 没有 type：{"x": 3}
+- type 不是字符串：{"type": 5}
+
+invalid_message：字段缺少或多余
+- paint 缺 color
+- paint 多一个 "z": 1
+- snapshot 多一个字段：{"type":"snapshot","x":1}
+
+invalid_message：字段类型不对（都用 paint 的 x）
+- "3"（字符串）、3.0（小数）、true（布尔）、null
+- hello 的 name 是 5
+
+invalid_message：pattern 的类型不对
+- pattern 不是列表：5
+- 某一行不是列表：[1, 2]
+- 元素是字符串：[[1, "a"]]
+- 元素是布尔：[[true]]
+
+unknown_type
+- {"type": "jump"}
+- {"type": "PAINT"}（大小写不同，也算不认识）
