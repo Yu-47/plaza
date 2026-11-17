@@ -1,0 +1,51 @@
+import pytest
+
+from plaza.rules import Cooldowns
+
+
+def test_new_user_can_draw_immediately() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    assert cooldowns.remaining("xiaoming", now=100.0) == 0
+
+
+def test_remaining_right_after_charge() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("xiaoming", now=100.0, pixels=1)
+    assert cooldowns.remaining("xiaoming", now=100.0) == pytest.approx(1.0)
+
+
+def test_remaining_decreases_as_time_passes() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("xiaoming", now=100.0, pixels=10)       # 冷却 10 秒，到 110 秒为止
+    assert cooldowns.remaining("xiaoming", now=104.0) == pytest.approx(6.0)
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (109.5, 0.5),    # 还差半秒
+        (110.0, 0.0),    # 刚好到点
+        (115.0, 0.0),    # 早就过了：不能是负数
+    ],
+)
+def test_remaining_around_expiry(now: float, expected: float) -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("xiaoming", now=100.0, pixels=10)
+    assert cooldowns.remaining("xiaoming", now=now) == pytest.approx(expected)
+
+
+def test_cooldown_scales_with_pixels() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("one_pixel", now=0.0, pixels=1)
+    cooldowns.charge("sixteen_pixels", now=0.0, pixels=16)
+    assert cooldowns.remaining("sixteen_pixels", now=0.0) == pytest.approx(
+        16 * cooldowns.remaining("one_pixel", now=0.0)
+    )
+
+
+def test_ms_per_pixel_is_converted_to_seconds() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=500)                   # 每格 0.5 秒
+    cooldowns.charge("xiaoming", now=100.0, pixels=4)
+    assert cooldowns.remaining("xiaoming", now=100.0) == pytest.approx(2.0)
+
+
