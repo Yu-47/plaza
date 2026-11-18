@@ -49,3 +49,30 @@ def test_ms_per_pixel_is_converted_to_seconds() -> None:
     assert cooldowns.remaining("xiaoming", now=100.0) == pytest.approx(2.0)
 
 
+def test_users_are_independent() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("xiaoming", now=100.0, pixels=1)
+    assert cooldowns.remaining("xiaoming", now=100) == pytest.approx(1.0)
+    assert cooldowns.remaining("xiaohong", now=100) == pytest.approx(0.0)
+
+
+def test_charge_after_expiry_restarts_cooldown() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("xiaoming", now=100.0, pixels=1)
+    cooldowns.charge("xiaoming", now=200.0, pixels=1)
+    assert cooldowns.remaining("xiaoming", now=200) == pytest.approx(1.0)
+
+
+def test_charge_during_cooldown_raises() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("xiaoming", now=100.0, pixels=10)
+    with pytest.raises(RuntimeError):
+        cooldowns.charge("xiaoming", now=105.0, pixels=1)
+
+
+def test_charge_exactly_at_expiry_is_allowed() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    cooldowns.charge("xiaoming", now=100.0, pixels=10)
+    cooldowns.charge("xiaoming", now=110.0, pixels=1)
+    assert cooldowns.remaining("xiaoming", now=110.0) == pytest.approx(1.0)
+    

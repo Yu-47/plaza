@@ -1,10 +1,21 @@
 class Cooldowns:
-    def __init__(self, ms_per_pixel: int) -> None: ...
+    def __init__(self, ms_per_pixel: int) -> None: 
+        self.ms_per_pixel = ms_per_pixel
+        self._available_at: dict[str, float] = {}
 
     def remaining(self, name: str, now: float) -> float:
-        """这个人还要等多久才能画（0 表示现在就可以画）。"""
-        ...
+        """这个人还要等多久才能画（0 表示现在就可以画）。now的单位是秒"""
+        available = self._available_at.get(name, 0.0)
+        return max(0.0, available - now)
 
-    def charge(self, name: str, now: float, cells: int) -> None:
-        """画成功后调用：冷却 = 每格冷却时间 × 画的格数"""
+        
+
+    def charge(self, name: str, now: float, pixels: int) -> None:
+        """修改一个人最早可以画的时间。画成功后调用：冷却 = 每格冷却时间 × 画的格数"""
+        cooldown = pixels * self.ms_per_pixel / 1000
+            
+        if self.remaining(name, now) > 0:
+            raise RuntimeError("在该连接还有cooldown的时候，不应该成功发出请求且调用cooldown.charge()")
+
+        self._available_at[name] = now + cooldown
         
