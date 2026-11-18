@@ -12,16 +12,25 @@ from plaza.rules import Cooldowns
 
 WIDTH = 8
 
+# @pytest.fixture
+# async def server_url():
+#     """每个测试启动一个全新的服务器，测试结束后自动关闭。"""
+#     cooldowns = Cooldowns(ms_per_pixel=1000)
+#     canvas = Canvas(width=WIDTH, height=WIDTH)
+#     state = ServerState(canvas, cooldowns)
+#     async with serve(partial(handler, state=state), "localhost", 0) as server:
+#         port = server.sockets[0].getsockname()[1]
+#         yield f"ws://localhost:{port}"
+
 @pytest.fixture
-async def server_url():
-    """每个测试启动一个全新的服务器，测试结束后自动关闭。"""
-    cooldowns = Cooldowns(ms_per_pixel=1000)
+async def zero_cooldown_server_url():
+    """每个测试启动一个全新的服务器，测试结束后自动关闭。但是冷却时间为0秒。"""
+    cooldowns = Cooldowns(ms_per_pixel=0)
     canvas = Canvas(width=WIDTH, height=WIDTH)
     state = ServerState(canvas, cooldowns)
     async with serve(partial(handler, state=state), "localhost", 0) as server:
         port = server.sockets[0].getsockname()[1]
         yield f"ws://localhost:{port}"
-
 
 async def say_hello(ws, name: str) -> None:
     await ws.send(json.dumps({"type": "hello", "name": name}))
@@ -40,10 +49,10 @@ async def read_region(ws) -> list[int]:
     return region
 
 
-async def test_stamps_never_interleave(server_url: str) -> None:
-    async with connect(server_url, proxy=None) as a, \
-               connect(server_url, proxy=None) as b, \
-               connect(server_url, proxy=None) as watcher:
+async def test_stamps_never_interleave(zero_cooldown_server_url: str) -> None:
+    async with connect(zero_cooldown_server_url, proxy=None) as a, \
+               connect(zero_cooldown_server_url, proxy=None) as b, \
+               connect(zero_cooldown_server_url, proxy=None) as watcher:
         # 1. 三个客户端各自 hello（名字不同）
         await say_hello(a, "Aclient")
         await say_hello(b, "Bclient")

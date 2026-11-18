@@ -46,10 +46,12 @@ class Canvas:
 
     def paint(self, x: int, y: int, color: int) -> None:
         """设置某一格的颜色"""
+        
         self._check_bounds(x, y)
         self._check_color(color)
-        
         self._pixels[self._index(x, y)] = color
+
+
 
     def stamp(self, x: int, y: int, pattern: list[list[int]]) -> None:
         """盖印章"""

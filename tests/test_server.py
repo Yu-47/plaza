@@ -127,3 +127,98 @@ def test_no_hello(text: str, code: str) -> None:
     reply = json.loads(handle_message(text, canvas, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == code
+
+
+# ---------- 冷却 ----------
+
+
+PAINT = '{"type": "paint", "x": 0, "y": 0, "color": 1}'
+
+
+def test_paint_twice_immediately_hits_cooldown() -> None:
+    state, session = identified()
+    handle_message(PAINT, state, session, now=0.0)
+    reply = json.loads(handle_message(PAINT, state, session, now=0.0))
+    assert reply["code"] == "cooldown"
+    assert reply["retry_after_ms"] == 1000
+
+
+def test_paint_one_after_one_exactly() -> None:
+    state, session = identified()
+    reply1 = json.loads(handle_message(PAINT, state, session, now=0.0))
+    reply2 = json.loads(handle_message(PAINT, state, session, now=1.0))
+    assert reply1["type"] == "painted"
+    assert reply2["type"] == "painted"
+
+
+def test_paint_one_after_400ms() -> None:
+    state, session = identified()
+    reply1 = json.loads(handle_message(PAINT, state, session, now=0.0))
+    reply2 = json.loads(handle_message('{"type": "paint", "x": 0, "y": 0, "color": 5}', state, session, now=0.4))
+    assert reply1["type"] == "painted"
+    assert reply2["code"] == "cooldown"
+    assert reply2["retry_after_ms"] == 600
+    watch = json.loads(handle_message('{"type": "read", "x": 0, "y": 0}', state, session, now=0.6))
+    assert watch["color"] == 1
+
+
+def test_paint_one_after_700ms() -> None:
+    state, session = identified()
+    reply1 = json.loads(handle_message(PAINT, state, session, now=0.0))
+    reply2 = json.loads(handle_message(PAINT, state, session, now=0.7))
+    assert reply1["type"] == "painted"
+    assert reply2["code"] == "cooldown"
+    assert reply2["retry_after_ms"] == 300
+
+
+def test_paint_false_paint_true() -> None:
+    state, session = identified()
+    reply1 = json.loads(handle_message('{"type": "paint", "x": 9, "y": 0, "color": 1}', state, session, now=0.0))
+    reply2 = json.loads(handle_message(PAINT, state, session, now=0.0))
+    assert reply1["type"] == "error"
+    assert reply1["code"] == "out_of_bounds"
+    assert reply2["type"] == "painted"
+
+
+STAMP = '{"type": "stamp", "x": 0, "y": 0, "pattern": [[1,2],[3,4]]}'
+
+
+def test_stamp_one_then_paint_one_in_cooldown() -> None:
+    state, session = identified()
+    reply1 = json.loads(handle_message(STAMP, state, session, now=0.0))
+    reply2 = json.loads(handle_message(PAINT, state, session, now=3.9))
+    assert reply1["type"] == "stamped"
+    assert reply2["type"] == "error"
+
+
+def test_paint_then_read_and_snapshot() -> None:
+    state, session = identified()
+    handle_message(PAINT, state, session, now=0.0)
+    reply1 = json.loads(handle_message('{"type": "read", "x": 2, "y": 0}', state, session, now=0.0))
+    reply2 = handle_message('{"type": "snapshot"}', state, session, now=0.0)
+    assert reply1["type"] == "pixel"
+    assert type(reply2) == bytes
+
+
+def test_stamp_one_then_paint_one() -> None:
+    state, session = identified()
+    reply1 = json.loads(handle_message(STAMP, state, session, now=0.0))
+    reply2 = json.loads(handle_message(PAINT, state, session, now=4.0))
+    assert reply1["type"] == "stamped"
+    assert reply1["cooldown_ms"] == 4000
+    assert reply2["type"] == "painted"
+    assert reply2["cooldown_ms"] == 1000
+
+
+def test_two_session() -> None:
+    state, session1 = identified()
+    session2 = Session("xiaoming")
+
+    reply1 = json.loads(handle_message(PAINT, state, session1, now=0.0))
+    reply2 = json.loads(handle_message(PAINT, state, session2, now=0.0))
+
+    assert reply1["type"] == "painted"
+    assert reply2["code"] == "cooldown"
+    assert isinstance(reply2["retry_after_ms"], int)
+
+

@@ -75,4 +75,14 @@ def test_charge_exactly_at_expiry_is_allowed() -> None:
     cooldowns.charge("xiaoming", now=100.0, pixels=10)
     cooldowns.charge("xiaoming", now=110.0, pixels=1)
     assert cooldowns.remaining("xiaoming", now=110.0) == pytest.approx(1.0)
+
+
+def test_negative_ms_per_pixel_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        Cooldowns(ms_per_pixel=-1)
+
     
+def test_ms_per_pixel_is_zero() -> None:
+    cooldowns = Cooldowns(ms_per_pixel=0)
+    cooldowns.charge("xiaoming", now=100.0, pixels=10)
+    assert cooldowns.remaining("xiaoming", now=110.0) == 0

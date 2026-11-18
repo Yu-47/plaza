@@ -1,5 +1,8 @@
 class Cooldowns:
     def __init__(self, ms_per_pixel: int) -> None: 
+        if ms_per_pixel < 0:
+            raise ValueError("每个像素的冷却时间应该是非负数")
+
         self.ms_per_pixel = ms_per_pixel
         self._available_at: dict[str, float] = {}
 

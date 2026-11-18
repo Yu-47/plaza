@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import math
 from dataclasses import dataclass
 from plaza.rules import Cooldowns
 from plaza.protocol import parse_request, ProtocolError, HelloRequest, ReadRequest, PaintRequest, StampRequest, SnapshotRequest
@@ -29,6 +30,13 @@ class Session:
 def _error(code: str, message: str, **kwargs: object) -> str:
     return json.dumps({"type": "error", "code": code, "message": message, **kwargs}, ensure_ascii=False)
 
+
+def _cooldown_error(state: ServerState, session: Session, now: float) -> str | None:
+    """判断是否在冷却时间内，如果在冷却时间内，则返回error。如没在冷却时间内，返回None"""
+    wait = state.cooldowns.remaining(session.name, now)
+    if wait > 0:
+        return _error("cooldown", "还在冷却时间中。", retry_after_ms=math.ceil(round(wait*1000, 6)))
+    return None
 
 Reply = bytes | str
 
@@ -65,22 +73,38 @@ def handle_message(text: str, state: ServerState, session: Session, now: float) 
                 })
             
             case PaintRequest():
+                error = _cooldown_error(state, session, now)
+                if error is not None:
+                    return error
+
                 state.canvas.paint(request.x, request.y, request.color)
+                state.cooldowns.charge(session.name, now, pixels=1)
+                
                 return json.dumps({
                     "type": "painted", 
                     "x": request.x, 
                     "y": request.y, 
                     "color": request.color, 
+                    "cooldown_ms": state.cooldowns.ms_per_pixel,
                 })
+
             
             case StampRequest():
+                error = _cooldown_error(state, session, now)
+                if error is not None:
+                    return error
+                
                 state.canvas.stamp(request.x, request.y, request.pattern)
+                cells = len(request.pattern[0])*len(request.pattern)
+                state.cooldowns.charge(session.name, now, pixels=cells)
+
                 return json.dumps({
                     "type": "stamped", 
                     "x": request.x, 
                     "y": request.y, 
                     "width": len(request.pattern[0]), 
                     "height": len(request.pattern), 
+                    "cooldown_ms": cells*state.cooldowns.ms_per_pixel,
                 })
                 
             case SnapshotRequest():
