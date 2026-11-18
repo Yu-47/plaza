@@ -2,20 +2,26 @@ import json
 
 import pytest
 
+from plaza.rules import Cooldowns
 from plaza.canvas import Canvas
-from plaza.server import Session, handle_message
+from plaza.server import ServerState, Session, handle_message
 
 
-def identified() -> tuple[Canvas, Session]:
+def identified() -> tuple[ServerState, Session]:
     """准备一块 3×2 画布，和一个已经 hello 过的会话。"""
-    return Canvas(width=3, height=2), Session(name="xiaoming")
+    canvas = Canvas(width=3, height=2)
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    state = ServerState(canvas, cooldowns)
+    return state, Session(name="xiaoming")
 
 
 # ---------- 套路 1：检查错误回复 ----------
 
 def test_request_before_hello_is_rejected() -> None:
     canvas, session = Canvas(width=3, height=2), Session()   # 还没 hello
-    reply = json.loads(handle_message('{"type": "read", "x": 0, "y": 0}', canvas, session))
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    state = ServerState(canvas, cooldowns)
+    reply = json.loads(handle_message('{"type": "read", "x": 0, "y": 0}', state, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == "not_identified"
 
@@ -24,7 +30,9 @@ def test_request_before_hello_is_rejected() -> None:
 
 def test_hello_sets_name_and_returns_welcome() -> None:
     canvas, session = Canvas(width=3, height=2), Session()
-    reply = json.loads(handle_message('{"type": "hello", "name": "xiaoming"}', canvas, session))
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    state = ServerState(canvas, cooldowns)
+    reply = json.loads(handle_message('{"type": "hello", "name": "xiaoming"}', state, session, now=0.0))
     assert session.name == "xiaoming"            # 会话状态变了
     assert reply["type"] == "welcome"            # 回复对了
     assert reply["width"] == 3
@@ -34,8 +42,8 @@ def test_hello_sets_name_and_returns_welcome() -> None:
 # ---------- 套路 3：失败后状态不能变 ----------
 
 def test_second_hello_is_rejected_and_name_unchanged() -> None:
-    canvas, session = identified()
-    reply = json.loads(handle_message('{"type": "hello", "name": "other"}', canvas, session))
+    state, session = identified()
+    reply = json.loads(handle_message('{"type": "hello", "name": "other"}', state, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == "already_identified"
     assert session.name == "xiaoming"            # 名字没被改掉
@@ -44,9 +52,9 @@ def test_second_hello_is_rejected_and_name_unchanged() -> None:
 # ---------- 套路 4：检查对画布的影响 + 二进制回复 ----------
 
 def test_snapshot_returns_canvas_bytes() -> None:
-    canvas, session = identified()
-    handle_message('{"type": "paint", "x": 2, "y": 1, "color": 7}', canvas, session)
-    reply = handle_message('{"type": "snapshot"}', canvas, session)
+    state, session = identified()
+    handle_message('{"type": "paint", "x": 2, "y": 1, "color": 7}', state, session, now=0.0)
+    reply = handle_message('{"type": "snapshot"}', state, session, now=0.0)
     assert isinstance(reply, bytes)              # 快照是二进制，不能 json.loads
     assert reply == bytes([0, 0, 0,
                            0, 0, 7])
@@ -63,32 +71,32 @@ def test_snapshot_returns_canvas_bytes() -> None:
     ],
 )
 def test_canvas_errors_are_translated(text: str, code: str) -> None:
-    canvas, session = identified()
-    reply = json.loads(handle_message(text, canvas, session))
+    state, session = identified()
+    reply = json.loads(handle_message(text, state, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == code
 
 
 def test_paint_success() -> None:
-    canvas, session = identified()
-    reply = json.loads(handle_message('{"type": "paint", "x": 1, "y": 0, "color": 1}', canvas, session))
+    state, session = identified()
+    reply = json.loads(handle_message('{"type": "paint", "x": 1, "y": 0, "color": 1}', state, session, now=0.0))
     assert reply["type"] == "painted"
-    assert canvas.get(1, 0) == 1
+    assert state.canvas.get(1, 0) == 1
 
 
 def test_read_success() -> None:
-    canvas, session = identified()
-    reply = json.loads(handle_message('{"type": "paint", "x": 1, "y": 0, "color": 1}', canvas, session))
-    reply = json.loads(handle_message('{"type": "read", "x": 1, "y": 0}', canvas, session))
+    state, session = identified()
+    reply = json.loads(handle_message('{"type": "paint", "x": 1, "y": 0, "color": 1}', state, session, now=0.0))
+    reply = json.loads(handle_message('{"type": "read", "x": 1, "y": 0}', state, session, now=0.0))
     assert reply["type"] == "pixel"
     assert reply["color"] == 1
 
 
 def test_stamp_success() -> None:
-    canvas, session = identified()
-    reply = json.loads(handle_message('{"type": "stamp", "x": 0, "y": 0, "pattern": [[1,2],[3,4]]}', canvas, session))
+    state, session = identified()
+    reply = json.loads(handle_message('{"type": "stamp", "x": 0, "y": 0, "pattern": [[1,2],[3,4]]}', state, session, now=0.0))
     assert reply["type"] == "stamped"
-    reply = handle_message('{"type": "snapshot"}', canvas, session)
+    reply = handle_message('{"type": "snapshot"}', state, session, now=0.0)
     assert reply == bytes([1, 2, 0, 3, 4, 0])
 
 
@@ -100,8 +108,8 @@ def test_stamp_success() -> None:
     ],
 )
 def test_wrong_protocol(text: str, code: str) -> None:
-    canvas, session = identified()
-    reply = json.loads(handle_message(text, canvas, session))
+    state, session = identified()
+    reply = json.loads(handle_message(text, state, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == code
 
@@ -116,6 +124,6 @@ def test_wrong_protocol(text: str, code: str) -> None:
 )
 def test_no_hello(text: str, code: str) -> None:
     canvas, session = Canvas(width=3, height=2), Session()
-    reply = json.loads(handle_message(text, canvas, session))
+    reply = json.loads(handle_message(text, canvas, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == code

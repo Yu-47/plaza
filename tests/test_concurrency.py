@@ -7,16 +7,18 @@ from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
 from plaza.canvas import Canvas
-from plaza.server import handler
+from plaza.server import handler, ServerState
+from plaza.rules import Cooldowns
 
 WIDTH = 8
-
 
 @pytest.fixture
 async def server_url():
     """每个测试启动一个全新的服务器，测试结束后自动关闭。"""
+    cooldowns = Cooldowns(ms_per_pixel=1000)
     canvas = Canvas(width=WIDTH, height=WIDTH)
-    async with serve(partial(handler, canvas=canvas), "localhost", 0) as server:
+    state = ServerState(canvas, cooldowns)
+    async with serve(partial(handler, state=state), "localhost", 0) as server:
         port = server.sockets[0].getsockname()[1]
         yield f"ws://localhost:{port}"
 
@@ -74,7 +76,7 @@ async def test_stamps_never_interleave(server_url: str) -> None:
 from plaza.server import Session, handle_message
 
 
-async def bad_handler(websocket, canvas: Canvas) -> None:
+async def bad_handler(websocket, state: ServerState) -> None:
     """故意写坏的服务器：印章逐格绘制，每格之间让出控制权。"""
     session = Session()
     async for message in websocket:
@@ -82,8 +84,8 @@ async def bad_handler(websocket, canvas: Canvas) -> None:
         if data.get("type") == "stamp" and session.name is not None:
             for dy, row in enumerate(data["pattern"]):
                 for dx, color in enumerate(row):
-                    canvas.paint(data["x"] + dx, data["y"] + dy, color)
+                    state.canvas.paint(data["x"] + dx, data["y"] + dy, color)
                     await asyncio.sleep(0)          # ← 这一行就是 bug
             await websocket.send(json.dumps({"type": "stamped"}))
         else:
-            await websocket.send(handle_message(message, canvas, session))
+            await websocket.send(handle_message(message, state.canvas, session))

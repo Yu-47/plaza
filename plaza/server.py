@@ -1,6 +1,8 @@
 import asyncio
 import json
+import time
 from dataclasses import dataclass
+from plaza.rules import Cooldowns
 from plaza.protocol import parse_request, ProtocolError, HelloRequest, ReadRequest, PaintRequest, StampRequest, SnapshotRequest
 from plaza.canvas import Canvas, InvalidColorError, OutOfBoundsError, InvalidPatternError, CanvasError
 from websockets.asyncio.server import serve
@@ -13,20 +15,25 @@ CANVAS_ERROR_CODES = {
     InvalidPatternError: "invalid_pattern",
 }
 
+@dataclass(frozen=True)
+class ServerState:
+    canvas: Canvas
+    cooldowns: Cooldowns
+
 
 @dataclass
 class Session:
     name: str | None = None    # None 表示还没发过 hello
 
 
-def _error(code: str, message: str) -> str:
-    return json.dumps({"type": "error", "code": code, "message": message}, ensure_ascii=False)
+def _error(code: str, message: str, **kwargs: object) -> str:
+    return json.dumps({"type": "error", "code": code, "message": message, **kwargs}, ensure_ascii=False)
 
 
 Reply = bytes | str
 
 
-def handle_message(text: str, canvas: Canvas, session: Session) -> Reply:
+def handle_message(text: str, state: ServerState, session: Session, now: float) -> Reply:
     """处理一条客户端消息，返回要发回的回复；所有错误都转成错误回复，不向外抛出"""
     try:
         request = parse_request(text)
@@ -37,14 +44,14 @@ def handle_message(text: str, canvas: Canvas, session: Session) -> Reply:
     if session.name is None and not is_hello:
         return _error("not_identified", "请先发送 hello 命令表明身份")
     if session.name is not None and is_hello:
-        return _error("already_identified", "该连接已以{session.name}的身份登陆，不能更改名字")
+        return _error("already_identified", f"该连接已以{session.name}的身份登录，不能更改名字")
     if session.name is None and is_hello:
         session.name = request.name
         return json.dumps({
             "type": "welcome",
-            "width": canvas.width,
-            "height": canvas.height,
-            "palette_size": canvas.palette_size,
+            "width": state.canvas.width,
+            "height": state.canvas.height,
+            "palette_size": state.canvas.palette_size,
         })
 
     try:
@@ -54,11 +61,11 @@ def handle_message(text: str, canvas: Canvas, session: Session) -> Reply:
                     "type": "pixel",
                     "x": request.x, 
                     "y": request.y, 
-                    "color": canvas.get(request.x, request.y),
+                    "color": state.canvas.get(request.x, request.y),
                 })
             
             case PaintRequest():
-                canvas.paint(request.x, request.y, request.color)
+                state.canvas.paint(request.x, request.y, request.color)
                 return json.dumps({
                     "type": "painted", 
                     "x": request.x, 
@@ -67,7 +74,7 @@ def handle_message(text: str, canvas: Canvas, session: Session) -> Reply:
                 })
             
             case StampRequest():
-                canvas.stamp(request.x, request.y, request.pattern)
+                state.canvas.stamp(request.x, request.y, request.pattern)
                 return json.dumps({
                     "type": "stamped", 
                     "x": request.x, 
@@ -77,7 +84,7 @@ def handle_message(text: str, canvas: Canvas, session: Session) -> Reply:
                 })
                 
             case SnapshotRequest():
-                return canvas.snapshot()
+                return state.canvas.snapshot()
             
             case _:
                 return _error("invalid_message", "无法识别命令语句")
@@ -85,16 +92,19 @@ def handle_message(text: str, canvas: Canvas, session: Session) -> Reply:
         return _error(CANVAS_ERROR_CODES[type(e)], str(e))
 
 
-async def handler(websocket, canvas: Canvas) -> None:
+async def handler(websocket, state: ServerState) -> None:
     session = Session()
     async for message in websocket:
-        reply = handle_message(message, canvas, session)    # 普通函数，不碰网络
+        now = time.monotonic()
+        reply = handle_message(message, state, session, now)    # 普通函数，不碰网络
         await websocket.send(reply)
 
 
 async def main() -> None:
     canvas = Canvas(100, 100, 16)
-    async with serve(partial(handler, canvas=canvas), "localhost", 8765) as server:
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    state = ServerState(canvas, cooldowns)
+    async with serve(partial(handler, state=state), "localhost", 8765) as server:
         await server.serve_forever()
 
 

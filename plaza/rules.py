@@ -3,11 +3,11 @@ class Cooldowns:
         self.ms_per_pixel = ms_per_pixel
         self._available_at: dict[str, float] = {}
 
+
     def remaining(self, name: str, now: float) -> float:
         """这个人还要等多久才能画（0 表示现在就可以画）。now的单位是秒"""
         available = self._available_at.get(name, 0.0)
         return max(0.0, available - now)
-
         
 
     def charge(self, name: str, now: float, pixels: int) -> None:
