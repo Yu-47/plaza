@@ -1,7 +1,9 @@
 import pytest
+from plaza.canvas import InvalidPatternError
+from plaza.rules import Cooldowns, stamp_too_large
 
-from plaza.rules import Cooldowns
 
+# ------------ cooldowns_tests ------------
 
 def test_new_user_can_draw_immediately() -> None:
     cooldowns = Cooldowns(ms_per_pixel=1000)
@@ -86,3 +88,35 @@ def test_ms_per_pixel_is_zero() -> None:
     cooldowns = Cooldowns(ms_per_pixel=0)
     cooldowns.charge("xiaoming", now=100.0, pixels=10)
     assert cooldowns.remaining("xiaoming", now=110.0) == 0
+
+
+# ------------ stamp_size_tests ------------
+
+MAX_STAMP_SIZE = 8
+
+def test_pattern_size() -> None:
+    pattern = [[1 for _ in range(8)] for _ in range(8)]
+    assert not stamp_too_large(pattern, MAX_STAMP_SIZE)
+
+
+def test_too_large_pattern1() -> None:
+    pattern = [[1] for _ in range(9)]
+    assert stamp_too_large(pattern, MAX_STAMP_SIZE)
+
+
+def test_too_large_pattern2() -> None:
+    pattern = [[1 for _ in range(9)]]
+    assert stamp_too_large(pattern, MAX_STAMP_SIZE)
+
+
+def test_empty_pattern_is_rejected_as_invalid() -> None:
+    pattern: list[list[int]] = []
+    with pytest.raises(InvalidPatternError):
+        stamp_too_large(pattern, MAX_STAMP_SIZE)
+
+
+def test_invalid_pattern() -> None:
+    pattern = [[1,4,5],[0,2],[5,1,2,3,4],[1,1,1,1,1,1,1,1,1,1,1],[0]]
+    with pytest.raises(InvalidPatternError):
+        stamp_too_large(pattern, MAX_STAMP_SIZE)
+    

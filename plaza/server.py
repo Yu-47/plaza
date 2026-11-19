@@ -3,7 +3,7 @@ import json
 import time
 import math
 from dataclasses import dataclass
-from plaza.rules import Cooldowns
+from plaza.rules import Cooldowns, stamp_too_large
 from plaza.protocol import parse_request, ProtocolError, HelloRequest, ReadRequest, PaintRequest, StampRequest, SnapshotRequest
 from plaza.canvas import Canvas, InvalidColorError, OutOfBoundsError, InvalidPatternError, CanvasError
 from websockets.asyncio.server import serve
@@ -20,6 +20,7 @@ CANVAS_ERROR_CODES = {
 class ServerState:
     canvas: Canvas
     cooldowns: Cooldowns
+    max_stamp_size: int
 
 
 @dataclass
@@ -31,12 +32,20 @@ def _error(code: str, message: str, **kwargs: object) -> str:
     return json.dumps({"type": "error", "code": code, "message": message, **kwargs}, ensure_ascii=False)
 
 
-def _cooldown_error(state: ServerState, session: Session, now: float) -> str | None:
-    """判断是否在冷却时间内，如果在冷却时间内，则返回error。如没在冷却时间内，返回None"""
-    wait = state.cooldowns.remaining(session.name, now)
+def _cooldown_error(state: ServerState, name: str, now: float) -> str | None:
+    """判断是否在冷却时间内，如果在冷却时间内，则返回error。如没在冷却时间内，返回None。"""
+    wait = state.cooldowns.remaining(name, now)
     if wait > 0:
         return _error("cooldown", "还在冷却时间中。", retry_after_ms=math.ceil(round(wait*1000, 6)))
     return None
+
+
+def _stamp_size_error(state: ServerState, pattern: list[list[int]]) -> str | None:
+    """判断印章大小是否合法，如果不合法返回error，如果合法返回None。"""
+    if stamp_too_large(pattern, state.max_stamp_size):
+        return _error("stamp_too_large", f"印章大小超过限定值 {state.max_stamp_size} ", max_stamp_size=state.max_stamp_size)
+    return None
+
 
 Reply = bytes | str
 
@@ -48,21 +57,25 @@ def handle_message(text: str, state: ServerState, session: Session, now: float) 
     except ProtocolError as e:
         return _error(e.code, str(e))
 
-    is_hello = isinstance(request, HelloRequest)
-    if session.name is None and not is_hello:
-        return _error("not_identified", "请先发送 hello 命令表明身份")
-    if session.name is not None and is_hello:
-        return _error("already_identified", f"该连接已以{session.name}的身份登录，不能更改名字")
-    if session.name is None and is_hello:
-        session.name = request.name
-        return json.dumps({
-            "type": "welcome",
-            "width": state.canvas.width,
-            "height": state.canvas.height,
-            "palette_size": state.canvas.palette_size,
-        })
+    if isinstance(request, HelloRequest):
+        if session.name is None:
+            session.name = request.name
+            return json.dumps({
+                "type": "welcome",
+                "width": state.canvas.width,
+                "height": state.canvas.height,
+                "palette_size": state.canvas.palette_size,
+                "max_stamp_size": state.max_stamp_size,
+            })
+        else:
+            return _error("already_identified", f"该连接已以{session.name}的身份登录，不能更改名字")
+    if not isinstance(request, HelloRequest):
+        if session.name is None:
+            return _error("not_identified", "请先发送 hello 命令表明身份")
 
     try:
+        name = session.name
+        assert name is not None
         match request:
             case ReadRequest():
                 return json.dumps({
@@ -73,12 +86,12 @@ def handle_message(text: str, state: ServerState, session: Session, now: float) 
                 })
             
             case PaintRequest():
-                error = _cooldown_error(state, session, now)
+                error = _cooldown_error(state, name, now)
                 if error is not None:
                     return error
 
                 state.canvas.paint(request.x, request.y, request.color)
-                state.cooldowns.charge(session.name, now, pixels=1)
+                state.cooldowns.charge(name, now, pixels=1)
                 
                 return json.dumps({
                     "type": "painted", 
@@ -90,13 +103,17 @@ def handle_message(text: str, state: ServerState, session: Session, now: float) 
 
             
             case StampRequest():
-                error = _cooldown_error(state, session, now)
-                if error is not None:
-                    return error
+                stamp_size_error = _stamp_size_error(state, request.pattern)
+                if stamp_size_error is not None:
+                    return stamp_size_error
+                
+                cooldown_error = _cooldown_error(state, name, now)
+                if cooldown_error is not None:
+                    return cooldown_error
                 
                 state.canvas.stamp(request.x, request.y, request.pattern)
                 cells = len(request.pattern[0])*len(request.pattern)
-                state.cooldowns.charge(session.name, now, pixels=cells)
+                state.cooldowns.charge(name, now, pixels=cells)
 
                 return json.dumps({
                     "type": "stamped", 
@@ -127,7 +144,8 @@ async def handler(websocket, state: ServerState) -> None:
 async def main() -> None:
     canvas = Canvas(100, 100, 16)
     cooldowns = Cooldowns(ms_per_pixel=1000)
-    state = ServerState(canvas, cooldowns)
+    max_stamp_size = 8
+    state = ServerState(canvas, cooldowns, max_stamp_size)
     async with serve(partial(handler, state=state), "localhost", 8765) as server:
         await server.serve_forever()
 

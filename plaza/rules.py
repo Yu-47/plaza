@@ -1,3 +1,5 @@
+from plaza.canvas import check_pattern_shape
+
 class Cooldowns:
     def __init__(self, ms_per_pixel: int) -> None: 
         if ms_per_pixel < 0:
@@ -21,4 +23,11 @@ class Cooldowns:
             raise RuntimeError("在该连接还有cooldown的时候，不应该成功发出请求且调用cooldown.charge()")
 
         self._available_at[name] = now + cooldown
+
+
+def stamp_too_large(pattern: list[list[int]], max_size: int) -> bool:
+    """图案的宽或高超过了 max_size 时返回 True """
+    check_pattern_shape(pattern)
         
+    width = max((len(row) for row in pattern), default=0)
+    return len(pattern) > max_size or width > max_size

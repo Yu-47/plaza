@@ -22,12 +22,14 @@ WIDTH = 8
 #         port = server.sockets[0].getsockname()[1]
 #         yield f"ws://localhost:{port}"
 
+MAX_STAMP_SIZE = 8
+
 @pytest.fixture
 async def zero_cooldown_server_url():
     """每个测试启动一个全新的服务器，测试结束后自动关闭。但是冷却时间为0秒。"""
     cooldowns = Cooldowns(ms_per_pixel=0)
     canvas = Canvas(width=WIDTH, height=WIDTH)
-    state = ServerState(canvas, cooldowns)
+    state = ServerState(canvas, cooldowns, MAX_STAMP_SIZE)
     async with serve(partial(handler, state=state), "localhost", 0) as server:
         port = server.sockets[0].getsockname()[1]
         yield f"ws://localhost:{port}"
@@ -97,4 +99,4 @@ async def bad_handler(websocket, state: ServerState) -> None:
                     await asyncio.sleep(0)          # ← 这一行就是 bug
             await websocket.send(json.dumps({"type": "stamped"}))
         else:
-            await websocket.send(handle_message(message, state.canvas, session))
+            await websocket.send(handle_message(message, state, session, now=0.0))

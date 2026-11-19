@@ -10,6 +10,17 @@ class InvalidColorError(CanvasError):
 class InvalidPatternError(CanvasError):
     """印章形状非法或者pattern为空"""
 
+
+def check_pattern_shape(pattern: list[list[int]]) -> None:
+    """检查印章非空且印章每行等长，如果不符合则报错。"""
+    if not pattern or not pattern[0]:
+        raise InvalidPatternError("pattern不能为空")
+
+    pattern_width = len(pattern[0])
+    for row in pattern[1:]:
+        if len(row) != pattern_width:
+            raise InvalidPatternError("pattern每行长度应相等")
+
 class Canvas:
     def __init__(self, width: int, height: int, palette_size: int = 16) -> None: 
         if width <= 0 or height <= 0:
@@ -37,6 +48,7 @@ class Canvas:
         if not 0 <= color < self.palette_size:
             raise InvalidColorError(f"颜色 {color} 超出调色盘范围 {self.palette_size}")
 
+
     def get(self, x: int, y: int) -> int:
         """取出某一格的颜色"""
         self._check_bounds(x, y)
@@ -55,16 +67,9 @@ class Canvas:
 
     def stamp(self, x: int, y: int, pattern: list[list[int]]) -> None:
         """盖印章"""
-
-        if not pattern or not pattern[0]:
-            raise InvalidPatternError("pattern不能为空")
-
+        check_pattern_shape(pattern)
         pattern_width = len(pattern[0])
         pattern_height = len(pattern)
-        for row in pattern[1:]:
-            if len(row) != pattern_width:
-                raise InvalidPatternError("pattern每行长度应相等")
-
         self._check_bounds(x, y)
         self._check_bounds(x+pattern_width-1, y+pattern_height-1)
 

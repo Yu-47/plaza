@@ -6,12 +6,17 @@ from plaza.rules import Cooldowns
 from plaza.canvas import Canvas
 from plaza.server import ServerState, Session, handle_message
 
+MAX_STAMP_SIZE = 8
 
-def identified() -> tuple[ServerState, Session]:
+def identified(large_canvas: bool=False) -> tuple[ServerState, Session]:
     """准备一块 3×2 画布，和一个已经 hello 过的会话。"""
-    canvas = Canvas(width=3, height=2)
+    if large_canvas:
+        canvas = Canvas(width=20, height=20)
+    else:
+        canvas = Canvas(width=3, height=2)
+
     cooldowns = Cooldowns(ms_per_pixel=1000)
-    state = ServerState(canvas, cooldowns)
+    state = ServerState(canvas, cooldowns, MAX_STAMP_SIZE)
     return state, Session(name="xiaoming")
 
 
@@ -20,7 +25,7 @@ def identified() -> tuple[ServerState, Session]:
 def test_request_before_hello_is_rejected() -> None:
     canvas, session = Canvas(width=3, height=2), Session()   # 还没 hello
     cooldowns = Cooldowns(ms_per_pixel=1000)
-    state = ServerState(canvas, cooldowns)
+    state = ServerState(canvas, cooldowns, MAX_STAMP_SIZE)
     reply = json.loads(handle_message('{"type": "read", "x": 0, "y": 0}', state, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == "not_identified"
@@ -31,7 +36,7 @@ def test_request_before_hello_is_rejected() -> None:
 def test_hello_sets_name_and_returns_welcome() -> None:
     canvas, session = Canvas(width=3, height=2), Session()
     cooldowns = Cooldowns(ms_per_pixel=1000)
-    state = ServerState(canvas, cooldowns)
+    state = ServerState(canvas, cooldowns, MAX_STAMP_SIZE)
     reply = json.loads(handle_message('{"type": "hello", "name": "xiaoming"}', state, session, now=0.0))
     assert session.name == "xiaoming"            # 会话状态变了
     assert reply["type"] == "welcome"            # 回复对了
@@ -124,7 +129,9 @@ def test_wrong_protocol(text: str, code: str) -> None:
 )
 def test_no_hello(text: str, code: str) -> None:
     canvas, session = Canvas(width=3, height=2), Session()
-    reply = json.loads(handle_message(text, canvas, session, now=0.0))
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    state = ServerState(canvas, cooldowns, MAX_STAMP_SIZE)
+    reply = json.loads(handle_message(text, state, session, now=0.0))
     assert reply["type"] == "error"
     assert reply["code"] == code
 
@@ -222,3 +229,41 @@ def test_two_session() -> None:
     assert isinstance(reply2["retry_after_ms"], int)
 
 
+# ---------- 最大印章尺寸 ----------
+
+
+def test_nine_column_stamp() -> None:
+    state, session = identified(large_canvas=True)
+    reply = json.loads(handle_message('{"type": "stamp", "x": 0, "y": 0, "pattern": [[1, 1, 1, 1, 1, 1, 1, 1, 1]]}', state, session, now=0.0))
+    assert reply["type"] == "error"
+    assert reply["code"] == "stamp_too_large"
+    assert reply["max_stamp_size"] == state.max_stamp_size
+
+
+def test_cooldowns_period_stamp() -> None:
+    state, session = identified(large_canvas=True)
+    handle_message(PAINT, state, session, now=0.0)
+    reply = json.loads(handle_message('{"type": "stamp", "x": 0, "y": 0, "pattern": [[1, 1, 1, 1, 1, 1, 1, 1, 1]]}', state, session, now=0.0))
+
+    assert reply["type"] == "error"
+    assert reply["code"] == "stamp_too_large"
+
+
+def test_reject_large_stamp() -> None:
+    state, session = identified(large_canvas=True)
+    reply1 = json.loads(handle_message('{"type": "stamp", "x": 0, "y": 0, "pattern": [[1, 1, 1, 1, 1, 1, 1, 1, 1]]}', state, session, now=0.0))
+    assert reply1["type"] == "error"
+    assert reply1["code"] == "stamp_too_large"
+    reply2 = json.loads(handle_message('{"type": "stamp", "x": 0, "y": 0, "pattern": [[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]}', state, session, now=0.0))
+    assert reply2["type"] == "stamped"
+
+
+def test_welcome_message_has_max_stamp_size() -> None:
+    canvas = Canvas(width=3, height=2)
+    session = Session()
+    cooldowns = Cooldowns(ms_per_pixel=1000)
+    state = ServerState(canvas, cooldowns, MAX_STAMP_SIZE)
+
+    reply = json.loads(handle_message('{"type": "hello", "name": "xiaoming"}', state, session, now=0.0))
+    assert reply["type"] == "welcome"
+    assert reply["max_stamp_size"] == state.max_stamp_size
