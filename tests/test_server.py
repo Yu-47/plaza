@@ -267,3 +267,6 @@ def test_welcome_message_has_max_stamp_size() -> None:
     reply = json.loads(handle_message('{"type": "hello", "name": "xiaoming"}', state, session, now=0.0))
     assert reply["type"] == "welcome"
     assert reply["max_stamp_size"] == state.max_stamp_size
+
+
+    
